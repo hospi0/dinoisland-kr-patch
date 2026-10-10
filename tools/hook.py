@@ -18,17 +18,21 @@ from poc2 import (mov, ldb, ldbp, stb, ldb0, stb0, exb, exw, OR, AND, ADD, addi,
 TEX = 0x25C7A000; TEXA = (TEX & 0x7FFFF) // 8
 LIST = 0x25C00000
 CRAM_BK = 0x25F00000 + 0x7FE * 2
+OWN = 0x25C7FFC0; OWNL = (OWN & 0x7FFFF) // 8          # ★우리 명령+END 칸(VDP1 VRAM 끝 64 B) — 게임 명령표엔 END 칸 하나만 점프로(2026-10-10 선택지 멈춤: 예전엔 END 다음 칸을 덮어 게임 명령 망가뜨림)
+FEED = 0x06030CD0; LEAD = 25; STEP = 12              # 시계(위 sub 주석) — 앞섬 25 = 스테이트 14장 «넘긴 위치 − 실제» 11‥28 의 덩이 직후 값
+SEEK = 0x06031C04                                   # 뒤로가기 때 음성을 다시 튼 자리(프레임, 처음부터 틀면 0) — 스테이트 2장 2026-10-10
 BUF = Q.BUF; BSTR = Q.BSTR; SUBBUF = Q.SUBBUF
+DATA = P.RES + 0x800                                # 자료 자리(코드 2 KB 앞 — 1 KB 넘침 2026-10-10)
 
 
 def data_part():
     data = bytearray(); lab = {}
     def put(name, b):
         nonlocal data
-        data += bytes(-len(data) % 4); lab[name] = P.DATA + len(data); data += b
-    put('cur', bytes(4))
+        data += bytes(-len(data) % 4); lab[name] = DATA + len(data); data += b
+    put('cur', bytes(4)); put('lcd', bytes(4)); put('cnt', bytes(4))
     put('cmd', struct.pack('>16H', 0x0001, 0, 0x00A0, 0x8400, TEXA, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))
-    assert P.DATA + len(data) <= BUF
+    assert DATA + len(data) <= BUF
     return bytes(data), lab
 
 
@@ -37,8 +41,9 @@ def assemble():
     a = A(P.RES); a.lab.update(dlab); W = a.w
     # ---- VBI 감싸개 ----
     a.L('vbi'); W(0x4F22); a.ld(0, P.VBI); W(0x400B, 0x0009)
+    W(0x4F02, 0x4F12)                                                  # MACH·MACL 보존(시계에 dmulu)
     a.br('bsr', 'sub'); W(0x0009)
-    W(0x4F26, 0x000B, 0x0009)
+    W(0x4F16, 0x4F06, 0x4F26, 0x000B, 0x0009)
     # ---- 머리 훅(poc2 와 같음) ----
     a.L('hdr')
     a.ld(1, SUBBUF); W(movi(0, 0), 0x2102)
@@ -52,7 +57,15 @@ def assemble():
     a.L('sub'); W(0x4F22)
     a.ld(1, SUBBUF); W(0x6012); a.ld(2, 0x44535542); W(0x3020); a.br('bf', 'none')
     a.ld(1, Q.STREAMING); W(0x6012, 0x2008); a.br('bt', 'none')
-    a.ld(1, P.CLOCK); W(0x6312)
+    # ★시계 = 소리 칩에 넘긴 음성 바이트 위치(0x06030CD0, 파일 처음부터·머리 포함, 0x2000 B 씩) ÷ 735 − 앞섬 + 바뀐 뒤 센 프레임(최대 STEP)
+    #   E74 는 VBI 프레임 수라 일시정지 중에도 감 → 쓰지 말 것(2026-10-10 리모컨 메뉴). 일시정지·정지 중엔 CD0 = 0 → 자막 끔. 뒤로가기도 CD0 가 다시 튼 자리부터.
+    a.ld(1, FEED); W(0x6312, 0x2338); a.br('bt', 'none')
+    a.ld(1, 'lcd'); W(0x6012, 0x3030); a.br('bt', 'samecd')
+    W(0x2132); a.ld(1, 'cnt'); W(movi(0, 0), 0x2102); a.br('bra', 'calc'); W(0x0009)
+    a.L('samecd'); a.ld(1, 'cnt'); W(0x6012, movi(2, STEP), 0x3022); a.br('bt', 'calc')
+    W(addi(0, 1), 0x2102)
+    a.L('calc'); a.ld(2, 0x592A25); W(0x3325, 0x030A)               # mach = CD0 × (2^32/735) 의 위 32비트 = CD0/735
+    a.ld(1, 'cnt'); W(0x6012, ADD(0, 3), addi(3, -LEAD))
     a.ld(4, SUBBUF); W(0x8542, exw(0, 6)); W(mov(4, 1), addi(1, 16))
     W(0x2668); a.br('bt', 'none')
     a.L('lp'); W(0x6015, exw(0, 0), 0x3303); a.br('bf', 'nx')
@@ -64,26 +77,39 @@ def assemble():
     W(0x2152, 0x2558); a.br('bt', 'off')
     a.br('bsr', 'draw'); W(mov(5, 1))
     a.L('on')                                                          # 매 프레임: 색 + 명령 넣기
-    a.ld(1, CRAM_BK); a.ld(0, 0x8000FFFF); W(0x2102)                  # 0x7FE 검정 · 0x7FF 흰색
+    a.ld(1, CRAM_BK); a.ld(0, 0x00007FFF); W(0x2102)                  # 0x7FE 검정 · 0x7FF 흰색 — ★최상위 비트 0(SPCTL 조건 3 = 색 MSB 면 색 연산 → 흐려짐)
     a.ld(1, LIST); a.ld(3, 512)
     a.L('il'); W(0x6011, exw(0, 0)); a.ld(2, 0x8000); W(0x3020); a.br('bt', 'iput')
-    W(0x8801); a.br('bf', 'inx')                                      # 종류 1 이고 SRCA 가 우리 것이면 덮어씀
-    W(0x8514, exw(0, 0)); a.ld(2, TEXA); W(0x3020); a.br('bt', 'iput')
+    a.ld(2, 0x5000); W(0x3020); a.br('bf', 'inx')                     # 우리 건너뛰기 점프면 다시 씀
+    W(0x8511, exw(0, 0)); a.ld(2, OWNL); W(0x3020); a.br('bt', 'iput')
     a.L('inx'); W(addi(1, 32), dt(3)); a.br('bf', 'il')
     a.br('bra', 'ret'); W(0x0009)
-    a.L('iput'); a.ld(2, 'cmd'); W(movi(3, 8))
+    a.L('iput')                                                        # ★게임 END 칸 하나만 «건너뛰고 점프 → 우리 칸» 으로(뒤 칸은 안 건드림)
+    a.ld(0, 0x5000); W(0x2101); a.ld(0, OWNL); W(0x8111)
+    a.ld(1, OWN); a.ld(2, 'cmd'); W(movi(3, 8))
     a.L('ic'); W(0x6026, 0x2102, addi(1, 4), dt(3)); a.br('bf', 'ic')
-    a.ld(0, 0x8000); W(0x2101)                                        # 뒤에 END
+    a.ld(0, 0x8000); W(0x2101)                                        # 우리 명령 뒤 END(우리 칸)
     a.br('bra', 'ret'); W(0x0009)
     a.L('same'); W(0x2558); a.br('bf', 'on')
-    a.L('off')                                                         # 꺼짐: 우리 명령 자리를 END 로
-    a.ld(1, LIST); a.ld(3, 512)
-    a.L('rl'); W(0x6011, exw(0, 0)); a.ld(2, 0x8000); W(0x3020); a.br('bt', 'ret')
-    W(0x8801); a.br('bf', 'rnx')
-    W(0x8514, exw(0, 0)); a.ld(2, TEXA); W(0x3020); a.br('bf', 'rnx')
-    a.ld(0, 0x8000); W(0x2101); a.br('bra', 'ret'); W(0x0009)
-    a.L('rnx'); W(addi(1, 32), dt(3)); a.br('bf', 'rl')
+    a.L('off'); a.br('bsr', 'unins'); W(0x0009)                       # 꺼짐: 우리 점프를 END 로
+    a.br('bra', 'ret'); W(0x0009)
     a.L('ret'); W(0x4F26, 0x000B, 0x0009)
+    # ---- unins: 게임 명령표의 우리 점프(0x5000·링크 OWNL)를 END 로 되돌림(r0‥r3 만 씀) ----
+    a.L('unins'); a.ld(1, LIST); a.ld(3, 512)
+    a.L('ul'); W(0x6011, exw(0, 0)); a.ld(2, 0x8000); W(0x3020); a.br('bt', 'uret')
+    a.ld(2, 0x5000); W(0x3020); a.br('bf', 'unx')
+    W(0x8511, exw(0, 0)); a.ld(2, OWNL); W(0x3020); a.br('bf', 'unx')
+    a.ld(0, 0x8000); W(0x2101); a.br('bra', 'uret'); W(0x0009)
+    a.L('unx'); W(addi(1, 32), dt(3)); a.br('bf', 'ul')
+    a.L('uret'); W(0x000B, 0x0009)
+    # ---- ★게임이 명령표를 «읽기» 전에 우리 점프를 치움(2026-10-10 리모컨 메뉴: 게임이 END 를 찾아 붙이고·표를 RAM 으로 되읽음 → 점프를 먹어 메뉴가 안 보임) ----
+    a.L('fe'); W(0x4F22, push(3), push(4)); a.br('bsr', 'unins'); W(0x0009)   # 0x060182B8 «END 찾기» 대체(원래 r0‥r2 만 씀)
+    W(pop(4), pop(3), 0x4F26, mov(4, 0)); a.ld(2, 0x8000)
+    a.L('fl'); W(0x6101, exw(1, 1), 0x3120); a.br('bt', 'fd'); W(addi(0, 32)); a.br('bra', 'fl'); W(0x0009)
+    a.L('fd'); W(0x000B, 0x0009)
+    for nm, to in (('rb1', 0x06018EB8), ('rb2', 0x06018E84)):         # 되읽기 복사(0x06015EEC · 0x06012B44 리터럴)
+        a.L(nm); W(0x4F22, push(3), push(4), push(5), push(6), push(7)); a.br('bsr', 'unins'); W(0x0009)
+        W(pop(7), pop(6), pop(5), pop(4), pop(3), 0x4F26); a.ld(0, to); W(0x402B, 0x0009)
     # ---- draw(r1 = 쪽): 1비트 버퍼에 찍기 → 8비트 선형 그림 → 명령 칸 ----
     a.L('draw')
     W(0x4F22, push(1)); W(*[push(r) for r in range(8, 15)])
@@ -149,8 +175,8 @@ def assemble():
     a.L('sd'); W(mov(0, 7), shlr16(0), ldb(2, 1), OR(1, 0), stb(0, 2))
     W(mov(7, 1), shlr8(1), ldb0(2, 1), OR(1, 0), stb0(2, 1))
     W(ldb0(2, 2), OR(7, 0), stb0(2, 2), 0x000B, addi(2, BSTR))
-    code = a.build(); assert len(code) <= P.DATA - P.RES, len(code)
-    return code + bytes(P.DATA - P.RES - len(code)) + data, a.lab
+    code = a.build(); assert len(code) <= DATA - P.RES, len(code)
+    return code + bytes(DATA - P.RES - len(code)) + data, a.lab
 
 
 def build_exe():
@@ -159,4 +185,9 @@ def build_exe():
     st = P.stub(len(res) // 4)
     for lit, old, new in ((P.ENTRY_LIT, P.MAIN, P.BSS), (P.VBI_LIT, P.VBI, lab['vbi']), (Q.MEMCPY_LIT, Q.MEMCPY, lab['hdr'])):
         assert struct.unpack_from('>I', exe, lit - P.LOAD)[0] == old; struct.pack_into('>I', exe, lit - P.LOAD, new)
+    for lit, old, new in ((0x06015EEC, 0x06018EB8, lab['rb1']), (0x06012B44, 0x06018E84, lab['rb2'])):
+        assert struct.unpack_from('>I', exe, lit - P.LOAD)[0] == old; struct.pack_into('>I', exe, lit - P.LOAD, new)
+    FE = 0x060182B8 - P.LOAD                                           # END 찾기 → mov.l @(4,pc),r0 · jmp @r0 · nop · nop · .long fe
+    assert exe[FE:FE + 4] == bytes.fromhex('6043D205')
+    exe[FE:FE + 12] = struct.pack('>4HI', 0xD001, 0x402B, 0x0009, 0x0009, lab['fe'])
     return bytes(exe) + st + res, res, lab

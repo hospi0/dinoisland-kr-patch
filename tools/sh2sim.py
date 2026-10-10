@@ -38,7 +38,7 @@ def run(mem, pc, regs=None, stop=0xDEAD0000, calls=None, limit=5_000_000):
     """pc 부터 실행, stop 주소로 돌아오면 끝. calls = {주소: 파이썬 함수(r, mem)} — JSR/JMP 대상 흉내."""
     r = [0] * 16; r[15] = 0x060FF000
     if regs: r[:len(regs)] = regs
-    pr = stop; T = 0; macl = 0; delay = None; n = 0
+    pr = stop; T = 0; macl = 0; mach = 0; delay = None; n = 0
     while True:
         n += 1
         if n > limit: raise RuntimeError('너무 오래 돔 pc=0x%08X' % pc)
@@ -55,6 +55,12 @@ def run(mem, pc, regs=None, stop=0xDEAD0000, calls=None, limit=5_000_000):
         elif op & 0xF0FF == 0x4022: r[nn] = (r[nn] - 4) & M32; mem.w32(r[nn], pr)
         elif op & 0xF0FF == 0x4026: pr = mem.r32(r[nn]); r[nn] = (r[nn] + 4) & M32
         elif op & 0xF0FF == 0x001A: r[nn] = macl
+        elif op & 0xF0FF == 0x000A: r[nn] = mach
+        elif op & 0xF0FF == 0x4002: r[nn] = (r[nn] - 4) & M32; mem.w32(r[nn], mach)
+        elif op & 0xF0FF == 0x4012: r[nn] = (r[nn] - 4) & M32; mem.w32(r[nn], macl)
+        elif op & 0xF0FF == 0x4006: mach = mem.r32(r[nn]); r[nn] = (r[nn] + 4) & M32
+        elif op & 0xF0FF == 0x4016: macl = mem.r32(r[nn]); r[nn] = (r[nn] + 4) & M32
+        elif op & 0xF00F == 0x3005: v = r[nn] * r[m]; mach = v >> 32 & M32; macl = v & M32   # dmulu.l
         elif h == 0xD: r[nn] = mem.r32(((pc + 4) & ~3) + lo8 * 4)
         elif h == 0x9: r[nn] = s16(mem.r16(pc + 4 + lo8 * 2)) & M32
         elif h == 0xE: r[nn] = s8(op) & M32

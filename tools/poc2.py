@@ -49,7 +49,7 @@ def payload(pages, delay):
     gofs = o
     body = b''.join(recs) + b''.join(G.gbytes(c) for c in gl)
     tab = b''.join(struct.pack('>HHHH', t0 + delay, t1 + delay, offs[i], 0) for i, (t0, t1, _) in enumerate(pages))
-    b = b'DSUB' + struct.pack('>H', len(pages)) + bytes(6) + struct.pack('>H', gofs) + bytes(2) + tab + body
+    b = b'DSUB' + struct.pack('>HH', len(pages), delay) + bytes(4) + struct.pack('>H', gofs) + bytes(2) + tab + body
     return b + bytes(-len(b) % 4)
 
 

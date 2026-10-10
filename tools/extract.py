@@ -15,7 +15,7 @@ HALLU = {'ご視聴ありがとうございました', 'チャンネル登録を
 
 
 def hallu(s):
-    t = s['t'].strip()
+    t = s['t'].strip().rstrip('。、.!！?？')                                 # ★끝 부호 떼고 비교(ご視聴…。 빠졌음 2026-10-10)
     if t in HALLU: return True
     if re.fullmatch(r'(.)\1{5,}[!！ー]*', t.replace('ー', '')): return True                  # うううう… 같은 한 글자 반복
     if re.fullmatch(r'((..?.?)\2{4,}).*', t) and len(set(t)) <= 4: return True            # だらんだらん… 반복

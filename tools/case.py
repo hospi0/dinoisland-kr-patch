@@ -128,20 +128,30 @@ def width(t):
     return int(round(ImageDraw.Draw(Image.new('L', (1, 1))).textlength(t, font=FONT)))
 
 
+CUR = 16                                              # ★왼쪽 16 px = 커서 자리(원본 그림 글자가 x 16 부터, 2026-10-10 첫 글자 가림)
+
+
+def cells_for(need):
+    """★말풍선 칸 수 c ↔ 그림 폭 w = 8 배수로 내림(12c + 20) — 원본 76개 전부 이 관계(2026-10-10, 예전 «올림(w/16)+1» 은 틀 어긋남·구멍)"""
+    c = 1
+    while (12 * c + 20) // 8 * 8 < need: c += 1
+    return c, (12 * c + 20) // 8 * 8
+
+
 def render(lines):
-    """한국어 줄들 → (폭, 높이, 바이트) — 폭 8 배수, 줄마다 16 px, 글자 색 1·나머지 0xFF"""
-    w = (max(width(t) for t in lines) + 7) // 8 * 8; h = 16 * len(lines)
+    """한국어 줄들 → (폭, 높이, 바이트, 칸 수) — 폭 = 칸 수에 맞춘 값, 줄마다 16 px, 글자 색 1·나머지 0xFF"""
+    c, w = cells_for(CUR + max(width(t) for t in lines)); h = 16 * len(lines)
     im = Image.new('L', (w, h), 0); d = ImageDraw.Draw(im); d.fontmode = '1'
     for i, t in enumerate(lines):
-        d.text((0, i * 16), t, font=FONT, fill=255)
+        d.text((CUR, i * 16), t, font=FONT, fill=255)
     a = np.array(im) > 0
-    return w, h, np.where(a, 1, 0xFF).astype(np.uint8).tobytes()
+    return w, h, np.where(a, 1, 0xFF).astype(np.uint8).tobytes(), c
 
 
 def build_sp(orig, lines):
-    w, h, px = render(lines)
+    w, h, px, c = render(lines)
     hd = bytearray(orig[:16])
-    struct.pack_into('>4H', hd, 4, -(-w // 16) + 1, len(lines), w, h)
+    struct.pack_into('>4H', hd, 4, c, len(lines), w, h)
     return bytes(hd) + px, w
 
 

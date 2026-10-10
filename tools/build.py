@@ -111,7 +111,9 @@ def main():
     t, nc = gfx.job_title(); files['/TITLET.GI'] = t
     print('④ 그림 SPRING·WARN1·WARN2·TITLET(%d B, 셀 %d)' % (len(t), nc))
     import hook                                          # ★VDP1 스프라이트 자막(VDP2 NBG3 판은 화면 깨짐 2026-10-10)
-    new, res, lab = hook.build_exe(); files['/BLDANIM.BIN'] = new
+    new, res, lab = hook.build_exe()
+    import savefont; new = savefont.patch(new)                     # 저장 화면 글자 판(본체·카트리지·녹화·호출·쓸 수 없습니다)
+    files['/BLDANIM.BIN'] = new
     print('③ BLDANIM %d B' % len(new))
     if '--write' in sys.argv:
         iso.relayout(P.OUT, files)
