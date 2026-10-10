@@ -1,0 +1,12 @@
+*
+!.gitignore
+!tools/
+!tools/*.py
+!tools/*.json
+!docs/
+!docs/*.md
+!work/
+!work/text/
+!work/text/*.tsv
+!work/text/*.py
+work/text/split/
